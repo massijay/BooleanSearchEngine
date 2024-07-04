@@ -6,6 +6,7 @@ import re  # Import the re module for regular expression operations
 from typing import Any, Self, TypeVar, Protocol, Generic, Optional, cast
 import threading
 import sys
+from enum import Enum
 
 #region sets
 
@@ -615,7 +616,7 @@ class InvertedIndex(Index):
         index = cls()
         for doc in corpus.values():
             if (doc.docID % 1000 == 0):
-                print(f"Processing document with ID: {doc.docID}...")            
+                print(f"Processing document with ID: {doc.docID}...")
             tokens = tokenize(doc)
             for position, token in enumerate(tokens):
                 term = Term(token, doc.docID, position)
@@ -639,6 +640,272 @@ class InvertedIndex(Index):
             return self._dictionary[term].posting_list
         except KeyError:
             return PostingList()
+        
+class QuerySpecialSymbols(Enum):
+    AND = '&'
+    OR = '|'
+    MINUS = '-'
+    OPEN_PARENTHESIS = '('
+    CLOSED_PARENTHESIS = ')'
+    QUOTE = '"'
+    WILDCARD = '*'
+    
+    @property
+    def symbol(self) -> str:
+        return self.value
+    
+class OperatorType(Enum):
+    AND = QuerySpecialSymbols.AND.symbol
+    OR = QuerySpecialSymbols.OR.symbol
+    MINUS = QuerySpecialSymbols.MINUS.symbol
+    WILDCARD = QuerySpecialSymbols.WILDCARD.symbol
+    
+    @property
+    def symbol(self) -> str:
+        return self.value
+    
+class TokenType(Enum):
+    WORD = re.compile('\\w+') #TODO clean up query and terms before building index (normalize)
+    WILDCARD_WORD = re.compile('[\\w\\*]*(?:(?:\\w\\*)|(?:\\*\\w))[\\w\\*]*') #TODO remove duplicate symbols in query(?)
+    OPERATOR = re.compile(f'[{QuerySpecialSymbols.AND.symbol}{QuerySpecialSymbols.OR.symbol}{QuerySpecialSymbols.MINUS.symbol}]')
+    OPEN_PARENTHESIS = re.compile(f'\\{QuerySpecialSymbols.OPEN_PARENTHESIS.symbol}')
+    CLOSED_PARENTHESIS = re.compile(f'\\{QuerySpecialSymbols.CLOSED_PARENTHESIS.symbol}')
+    QUOTE = re.compile(QuerySpecialSymbols.QUOTE.symbol)
+
+    def matches(self, string: str) -> bool:
+        m = re.fullmatch(self.value, string)
+        return m is not None
+
+
+class QueryNode(abc.ABC):
+    @abc.abstractmethod
+    def query(self, index: Index) -> set[int]:
+        pass
+
+class Token(QueryNode): #TODO word of the query, name correct?
+    def __init__(self, string: str) -> None:
+        self._string = string
+
+    def query(self, index: Index) -> set[int]:
+        return index[self._string].get_docIDs()
+    
+class Prefix(QueryNode):
+    def __init__(self, string: str) -> None:
+        self._string = string
+
+    def query(self, index: Index) -> set[int]:
+        return index[self._string].get_docIDs() # TODO: implement searching by prefix inside index
+    
+class WildcardOperator(QueryNode):
+    def __init__(self, string: str) -> None:
+        self._strings: list[str] = []
+        # TODO transform string into multiple trailing wildcard strings
+
+    def query(self, index: Index) -> set[int]: # TODO check slides and implement
+        ...
+
+class Phrase(QueryNode):
+    def __init__(self, ordered_tokens: list[str]) -> None:
+        self._terms = ordered_tokens
+
+    def query(self, index: Index) -> set[int]:
+        if (len(self._terms) == 0):
+            return set()
+        if (len(self._terms) == 1):
+            return index[self._terms[0]].get_docIDs()
+        # search the entire phrase
+        # get the posting list of each term
+        posting_lists: list[PostingList] = []
+        for t in self._terms:
+            pl = index[t]
+            if (len(pl) > 0):
+                posting_lists.append(pl)
+            else:
+                return set()
+        # get a set of the common docIDs
+        docIDs_list = map(PostingList.get_docIDs, posting_lists)
+        common_docIDs = reduce(lambda s1, s2: s1.intersection(s2), docIDs_list)
+        phrase_docIDs: set[int] = set()
+        # for each doc ID
+        for docID in common_docIDs: # for 1
+            phrase_found = False
+            # get the positions of the first term
+            first_term_positions = posting_lists[0][docID].term_positions
+            for p in first_term_positions: # for 2
+                # for each of the other terms:
+                phrase_found = True
+                for i in range(1, len(self._terms)): # for 3
+                    ith_term_positions = posting_lists[i][docID].term_positions
+                    # check if after i skips after the first term there is the i-th term,
+                    #  if not, stop checking the next terms positions (for this first term position)
+                    if ((p + i) not in ith_term_positions):
+                        # phrase is not complete
+                        phrase_found = False 
+                        break # for 3
+                # if the phrase is present add this doc ID to the result
+                if (phrase_found):
+                    phrase_docIDs.add(docID)
+                    # no need to evaluate other positions of the terms for this document,
+                    # phrase already found in it
+                    break # for 2
+        return phrase_docIDs
+
+class Operator(QueryNode):
+    def __init__(self, symbol: str, left_operand: QueryNode, right_operand: QueryNode) -> None:
+        self._left_operand = left_operand
+        self._right_operand = right_operand
+        self._type = OperatorType(symbol)
+
+    def query(self, index: Index) -> set[int]:
+        left_docIDs = self._left_operand.query(index)
+        right_docIDs = self._right_operand.query(index)
+        match self._type:
+            case OperatorType.AND:
+                return left_docIDs.intersection(right_docIDs)
+            case OperatorType.OR:
+                return left_docIDs.union(right_docIDs)
+            case OperatorType.MINUS:
+                return left_docIDs.difference(right_docIDs)
+            case _:
+                raise Exception # TODO
+            
+class Query:
+    @staticmethod
+    def _are_quotes_balanced(string: str) -> bool:
+        quotes = filter(lambda x: x == '"', string)
+        num = sum(1 for _ in quotes)
+        return num % 2 == 0
+    
+    @staticmethod
+    def _are_parenthesis_balanced(string: str) -> bool:
+        pars = filter(lambda x: x == "(" or x == ")", string)
+        num = reduce(lambda sum, char: sum + (1 if char == "(" else -1), pars, 0)
+        return num == 0
+
+    @staticmethod
+    def _space_symbols(string: str) -> str:
+        # put spaces around all special symbols
+        for sym in QuerySpecialSymbols:
+            string = string.replace(sym.symbol, f" {sym.symbol} ")
+        
+        # remove spaces before and after wildcards if a word is respectively before or after
+        # this is done in two steps because regex doesn't execute twice on overlapping matches
+        w1 = re.compile(f'(?:(\\w+)\\s*)?\\{QuerySpecialSymbols.WILDCARD.symbol}')
+        w2 = re.compile(f'\\{QuerySpecialSymbols.WILDCARD.symbol}(?:\\s*(\\w+))?')
+        string = w1.sub(f'\\1{QuerySpecialSymbols.WILDCARD.symbol}', string)
+        string = w2.sub(f'{QuerySpecialSymbols.WILDCARD.symbol}\\1', string)
+        return string
+    
+    @staticmethod
+    def _is_word(string: str) -> bool:
+        x = re.search("[a-zA-Z0-9]+", string) #TODO
+        return x is not None
+
+    @staticmethod
+    def _replace_spaces_with_ands(words: list[str]) -> list[str]:
+        if (len(words) == 0):
+            return [] 
+        correct: list[str] = []
+        for w in words[:-1]:
+            correct += [w, '&' , '(']
+        correct += [words[-1]]
+        correct += [')'] * (len(words) - 1)
+        return correct
+    
+    @classmethod
+    def _string_query_to_list(cls, query_string: str) -> list[str]:
+        s = cls._space_symbols(query_string)
+        full_list = s.split()
+        nonempty_list = filter(lambda s: len(s) != 0, full_list)
+        return ['(', *nonempty_list, ')']
+    
+    @classmethod
+    def _fix_implicit_ands(cls, words: list[str]) -> list[str]:
+        i = 0
+        start = -1
+        is_phrase = False
+        while (i < len(words)):
+            if (words[i] == '"'):
+                is_phrase = not is_phrase
+                i += 1
+                continue
+            if (is_phrase):
+                i += 1
+                continue
+            if (cls._is_word(words[i])):
+                if (start == -1):
+                    start = i
+                i += 1
+                continue
+            if (start != -1):
+                before = words[:start]
+                new_list = cls._replace_spaces_with_ands(words[start:i])
+                words = before + new_list + words[i:]
+                i = start + len(new_list)
+                start = -1
+                continue
+            i += 1
+        return words
+    
+    def __init__(self, query_string: str) -> None:
+        cls = self.__class__
+        if (not cls._are_quotes_balanced(query_string)):
+            raise Exception #TODO: create exception
+        if (not cls._are_parenthesis_balanced(query_string)):
+            raise Exception #TODO
+        # TODO: tokenization, normalization
+        spaced = cls._space_symbols(query_string)
+        temp_list = cls._string_query_to_list(spaced)
+        self._query_list = cls._fix_implicit_ands(temp_list)
+        self._i = 0
+        self._root = self._parse()
+
+    def _parse(self) -> QueryNode:
+        ql = self._query_list
+
+        if (TokenType.WORD.matches(ql[self._i])):
+            node = Token(ql[self._i])
+            self._i += 1
+            return node
+        
+        if (TokenType.WILDCARD_WORD.matches(ql[self._i])):
+            node = WildcardOperator(ql[self._i])
+            self._i += 1
+            return node
+        
+        if (TokenType.QUOTE.matches(ql[self._i])):
+            start = self._i + 1
+            end = start
+            while (TokenType.WORD.matches(ql[end])):
+                end += 1
+            if (not TokenType.QUOTE.matches(ql[end])):
+                raise Exception # TODO Special symbol found before phrase end, expected "
+            node = Phrase(ql[start:end])
+            self._i = end + 1
+            return node
+        
+        if (not TokenType.OPEN_PARENTHESIS.matches(ql[self._i])):
+            raise Exception # TODO Expected "("
+        self._i += 1
+        left = self._parse()
+
+        if (TokenType.CLOSED_PARENTHESIS.matches(ql[self._i])):
+            self._i += 1
+            return left
+
+        if (not TokenType.OPERATOR.matches(ql[self._i])):
+            raise Exception # TODO Expected valid OPERATOR symbol or ")"
+        op_symbol = ql[self._i]
+        self._i += 1
+        right = self._parse()
+
+        if (not TokenType.CLOSED_PARENTHESIS.matches(ql[self._i])):
+            raise Exception # TODO Expected ")"
+        self._i += 1
+        return Operator(op_symbol, left, right)
+
+    def execute(self, index: Index) -> set[int]:
+        return self._root.query(index)
 
 class BooleanIRSystem:
     def __init__(self, corpus: dict[int, Document], index: InvertedIndex) -> None:
@@ -650,13 +917,10 @@ class BooleanIRSystem:
         index = InvertedIndex.from_corpus(corpus)
         return cls(corpus, index)
     
-    def query(self, query: str) -> list[Document]:
-        #TODO phrase query and wildcard
-        words = query.split()
-        normalized = (normalize(w) for w in words)
-        posting_lists = (self._index[w] for w in normalized)
-        plist = reduce(lambda x, y: x.intersection(y), posting_lists)
-        return [self._corpus[docID] for docID in plist]
+    def query(self, query_string: str) -> list[Document]:
+        query = Query(query_string)
+        docIDs = query.execute(self._index)
+        return [self._corpus[docID] for docID in docIDs]
         
 def parse_corpus() -> dict[int, Document]:
     file_movie_names = "documents/movie.metadata.tsv"
@@ -677,7 +941,8 @@ def parse_corpus() -> dict[int, Document]:
             try:
                 # plot[0] movie id
                 # plot[1] plot
-                doc = Document(movies_dict[plot[0]], plot[1])
+                # doc = Document(movies_dict[plot[0]], plot[1]) # REMOVED PLOT FOR DEBUG
+                doc = Document(movies_dict[plot[0]], "")
                 corpus[doc.docID] = doc
             except KeyError:
                 #TODO
@@ -692,6 +957,7 @@ while (not exit):
     q = input()
     if (q != "$$"):
         result = ir.query(q)
+        print()
         for r in result:
             print(r)
         print()
