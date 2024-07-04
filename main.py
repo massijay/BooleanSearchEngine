@@ -8,7 +8,6 @@ import threading
 import sys
 from enum import Enum
 
-#region sets
 
 class Comparable(Protocol):    
     @abc.abstractmethod
@@ -32,29 +31,10 @@ class Comparable(Protocol):
         ...
 
 H = TypeVar("H", bound=Hashable)
-T = TypeVar("T")
 S = TypeVar("S")
-U = TypeVar("U", bound=Comparable)
+T = TypeVar("T")
 
-class BooleanSet(MutableSet[T]):
-        @abc.abstractmethod
-        def __init__(self, iterable: Iterable) -> None:
-            ...
-
-        @abc.abstractmethod
-        def union(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
-            ...
-        
-        @abc.abstractmethod
-        def intersection(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
-            ...
-
-        @abc.abstractmethod
-        def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None:
-            ...
-
-        def __repr__(self) -> str:
-            return "{" + ", ".join((str(e) for e in self)) + "}"
+#region sets
 
 class BooleanMap(MutableMapping[S, T]):
         @abc.abstractmethod
@@ -84,8 +64,7 @@ class BooleanMap(MutableMapping[S, T]):
         def __repr__(self) -> str:
             return "{" + ", ".join((str(e) for e in self)) + "}"
         
-
-class HashMap(BooleanMap[H, T]): # TODO: H is Hashable
+class HashMap(BooleanMap[H, T]):
     def __init__(self, mapping: Mapping[H, T] | None = None, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None:
         self._dict: dict[H, T] = {}
         if (mapping is not None):
@@ -288,153 +267,6 @@ class Trie(BooleanMap[str, T]):
             if (vo is not None):
                 result.add(k, on_same_element_callback(v, vo))
         return result # type: ignore
-
-class ListSet(BooleanSet[U]):
-    def __init__(self, iterable: Iterable = []) -> None:
-        self._list: list[U] = sorted(iterable)
-            
-    def __iter__(self) -> Iterator:
-        return iter(self._list)
-
-    def __contains__(self, x) -> bool:
-        return x in self._list
-    
-    def __len__(self) -> int:
-        return len(self._list)
-    
-    @classmethod
-    def _from_sorted_list(cls, sorted_list: list[U]) -> Self:
-        sl = cls()
-        sl._list = sorted_list
-        return sl
-    
-    def add(self, value: U) -> None:
-        for i in range(len(self._list)):
-            if (self._list[i] == value):
-                self._list[i] = value
-                return
-            elif (self._list[i] > value):
-                self._list.insert(i, value)
-                return
-        self._list.append(value)
-
-    def discard(self, value: Any) -> None:
-        for i in range(len(self._list)):
-            if (self._list[i] == value):
-                del self._list[i]
-                return
-
-    def union(self, other: Self, on_same_element_callback: Callable[[U, U], U] = lambda x, y: x) -> Self:
-        result: list[U] = []
-        i = j = 0
-        while (i < len(self._list) and j < len(other._list)):
-            if (self._list[i] < other._list[j]):
-                result.append(self._list[i])
-                i += 1
-            elif (self._list[i] == other._list[j]):
-                result.append(on_same_element_callback(self._list[i], other._list[j]))
-                i += 1
-                j += 1
-            else:
-                result.append(other._list[j])
-                j += 1
-        return self.__class__._from_sorted_list(result + self._list[i:] + other._list[j:])
-    
-    def intersection(self, other: Self, on_same_element_callback: Callable[[U, U], U] = lambda x, y: x) -> Self:
-        result: list[U] = []
-        i = j = 0
-        while (i < len(self._list) and j < len(other._list)):
-            if (self._list[i] == other._list[j]):
-                result.append(on_same_element_callback(self._list[i], other._list[j]))
-                i += 1
-                j += 1
-            elif (self._list[i] < other._list[j]):
-                i += 1
-            else:
-                j += 1
-        return self.__class__._from_sorted_list(result)
-    
-    def merge(self, other: Self, on_same_element_callback: Callable[[U, U], U] = lambda x, y: x) -> None:
-        # one of the two lists is empty
-        if (len(other._list) == 0):
-            return
-        if (len(self._list) == 0):
-            self._list = other._list
-            return
-        
-        # the self list elements are smaller than the others and
-        #  they have an element in common
-        if (self._list[-1] == other._list[0]):
-            self._list[-1] = on_same_element_callback(self._list[-1], other._list[0])
-            self._list += other._list[1:]
-            return
-        #  they haven't
-        if (self._list[-1] < other._list[0]):
-            self._list += other._list
-            return
-        
-        # same as above but self and other lists are swapped
-        if (other._list[-1] == self._list[0]):
-            m_el = on_same_element_callback(other._list[-1], self._list[0])
-            self._list = other._list[:-1] + [m_el] + self._list[1:]
-            return
-        if (other._list[-1] < self._list[0]):
-            self._list = other._list + self._list
-            return
-        
-        # the two lists are overlapping
-        self._list = self.union(other)._list
-            
-class HashSet(BooleanSet[U]): # TODO: update all code from tests
-    def __init__(self, iterable: Iterable[U] = []) -> None: # TODO: remove ALL mutable objects as default params 
-        self._dict: dict[int, U] = {hash(e): e for e in iterable}
-    
-    def __iter__(self) -> Iterator:
-        return iter(self._dict.values())
-    
-    def __contains__(self, x: object) -> bool:
-        return hash(x) in self._dict
-    
-    def __len__(self) -> int:
-        return len(self._dict)    
-    
-    @classmethod
-    def _from_dict(cls, dict: dict[int, U]) -> Self:
-        sl = cls()
-        sl._dict = dict
-        return sl
-    
-    def add(self, value: Any) -> None:
-        self._dict[hash(value)] = value
-
-    def discard(self, value: Any) -> None:
-        try:
-            del self._dict[hash(value)]
-        except KeyError:
-            pass
-
-    def union(self, other: Self, on_same_element_callback: Callable[[Any, Any], Any] = lambda x, y: x) -> Self:
-        result = self._dict.copy() if len(self._dict) > len(other._dict) else other._dict.copy()
-        small = other._dict if len(other._dict) < len(self._dict) else self._dict
-        for k in small:
-            if (k in result):
-                result[k] = on_same_element_callback(result[k], small[k])
-            else:
-                result[k] = small[k]
-        return self.__class__._from_dict(result)
-    
-    def intersection(self, other: Self, on_same_element_callback: Callable[[U, U], U] = lambda x, y: x) -> Self:
-        big = self._dict if len(self._dict) > len(other._dict) else other._dict
-        small = other._dict if len(other._dict) < len(self._dict) else self._dict
-        result = {k: on_same_element_callback(big[k], small[k]) for k in small if k in big}
-        return self.__class__._from_dict(result)
-    
-    def merge(self, other: Self, on_same_element_callback: Callable[[U, U], U] = lambda x, y: x) -> None:
-        for k in other._dict:
-            if (k in self._dict):
-                self._dict[k] = on_same_element_callback(self._dict[k], other._dict[k])
-            else:
-                self._dict[k] = other._dict[k]
 
 #endregion sets
 
