@@ -177,10 +177,6 @@ class Trie(BooleanMap[str, T]):
             next = next.children[string[i]]
             if (len(next.children) > 1 or (len(next.children) > 0 and next.has_value())):
                 # TODO: sistemare commenti
-                # caso -culo culetto (nodo dopo l ha 2 figli)
-                # caso -culone culo (nodo dopo "o" che ha value ed è anche di un altra parola (non è l'ultima lettera di key))
-                #  (se nodo dopo "o" è anche di un altra parola allora uguale a caso sotto)
-                # caso -culo culone (nodo dopo "o" deve perdere value ma non i fligli)
                 index = i + 1
                 node = next
         return (index, node)
@@ -543,88 +539,6 @@ class PostingList:
 
     def __repr__(self) -> str:
         return "[" + ", ".join((repr(p) for p in self.postings)) + "]"
-    
-    
-# class PostingList:
-#     def __init__(self) -> None: #TODO overload with first docID? with existing list?
-#         self.postings: set[Posting] = set() #TODO: skiplist?
-
-#     @classmethod
-#     def _from_set(cls, postings: set[Posting]) -> Self:
-#         plist = cls()
-#         plist.postings = postings
-#         return plist
-
-#     @classmethod
-#     def init_from(cls, docID: int, *term_positions: int) -> Self:
-#         pl = cls()
-#         pl.postings.add(Posting(docID, *term_positions))
-#         return pl
-
-#     def union(self, other: Self) -> Self:
-#         return self.__class__._from_set(self.postings.union(other.postings))
-    
-#     def intersection(self, other: Self) -> Self:
-#         return self.__class__._from_set(self.postings.intersection(other.postings))
-    
-#     def merge(self, other: Self) -> None:
-#        self.postings.update(other.postings)
-
-#     def __repr__(self) -> str:
-#         return ", ".join((repr(p) for p in self.postings))
-    
-# class PostingList:
-#     def __init__(self) -> None: #TODO overload with first docID? with existing list?
-#         self.postings: list[Posting] = [] #TODO: skiplist?
-
-#     @classmethod
-#     def _from_list(cls, postings: list[Posting]) -> Self:
-#         plist = cls()
-#         plist.postings = postings
-#         return plist
-
-#     @classmethod
-#     def init_from(cls, docID: int, *term_positions: int) -> Self:
-#         pl = cls()
-#         pl.postings = [Posting(docID, *term_positions)]
-#         return pl
-
-#     def union(self, other: Self) -> Self:
-#         result: list[Posting] = []
-#         i = j = 0
-#         while (i < len(self.postings) and j < len(other.postings)):
-#             if (self.postings[i] < other.postings[j]):
-#                 result.append(self.postings[i])
-#                 i += 1
-#             elif (self.postings[i] == other.postings[j]):
-#                 result.append(self.postings[i].union(other.postings[j]))
-#                 i += 1
-#                 j += 1
-#             else:
-#                 result.append(other.postings[j])
-#                 j += 1
-#         return self.__class__._from_list(result + self.postings[i:] + other.postings[j:])
-    
-#     def intersection(self, other: Self) -> Self:
-#         result: list[Posting] = []
-#         i = j = 0
-#         while (i < len(self.postings) and j < len(other.postings)):
-#             if (self.postings[i] == other.postings[j]):
-#                 result.append(self.postings[i])
-#                 i += 1
-#                 j += 1
-#             elif (self.postings[i] < other.postings[j]):
-#                 i += 1
-#             else:
-#                 j += 1
-#         return self.__class__._from_list(result)
-
-    
-#     def merge(self, other: Self) -> None:
-#         self.postings = self.union(other).postings
-
-#     def __repr__(self) -> str:
-#         return ", ".join((repr(p) for p in self.postings))
     
 class Term:
     def __init__(self, term: str, first_docID: int, *positions_in_first_doc: int) -> None:
