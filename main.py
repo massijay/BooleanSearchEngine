@@ -50,7 +50,7 @@ class BooleanMap(MutableMapping[S, T]):
             ...
 
         @abc.abstractmethod
-        def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None:
+        def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
             ...
 
         @abc.abstractmethod
@@ -80,9 +80,10 @@ class HashMap(BooleanMap[H, T]):
     def items(self) -> ItemsView[H, T]:
         return self._dict.items()
     
-    def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None:
+    def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
         for k,v in other.items():
             self.add(k, v, on_same_element_callback)
+        return self
 
     def union(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
         union = HashMap(self, on_same_element_callback)
@@ -180,6 +181,10 @@ class Trie(BooleanMap[str, T]):
         node.children[suffix[0]] = next
         self._size += 1
 
+    def update(self, mapping: Mapping[str, T], on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None: # type: ignore
+        for k,v in mapping.items():
+            self.add(k, v, on_same_element_callback)
+
     def get_if_present(self, key: str) -> Optional[T]:
         prefix, node = self._find_prefix_node(str(key))
         return node.value if prefix == key and node.has_value() else None
@@ -251,9 +256,10 @@ class Trie(BooleanMap[str, T]):
     def __len__(self) -> int:
         return self._size
     
-    def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> None:
+    def merge(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
         for k,v in other.items():
             self.add(k, v, on_same_element_callback)
+        return self
     
     def union(self, other: Self, on_same_element_callback: Callable[[T, T], T] = lambda x, y: x) -> Self:
         union = Trie(self, on_same_element_callback)
@@ -310,16 +316,20 @@ class Document:
 class Posting:
     def __init__(self, docID: int, *positions: int) -> None:
         self.docID: int = docID #TODO _docID or docID?
-        self.term_positions: list[int] = sorted(positions) # TODO can be a set? 
-
+        self.term_positions: set[int] = set(positions)
+        
+    def merge(self, other: Self) -> Self:
+        if (self.docID == other.docID):
+            self.term_positions.update(other.term_positions)
+        else:
+            raise ImpossibleMergeError
+        return self
+    
     def union(self, other: Self) -> Self:
         if (self.docID == other.docID):
             return self.__class__(self.docID, *self.term_positions, *other.term_positions)
         else:
             raise ImpossibleMergeError
-        
-    def merge(self, other: Self) -> None:
-        self.term_positions = self.union(other).term_positions
 
     def __eq__(self, other) -> bool:
         return self.docID == other.docID
@@ -361,8 +371,9 @@ class PostingList:
     def intersection(self, other: Self) -> Self:
         return self.__class__._from(self.postings.intersection(other.postings))
     
-    def merge(self, other: Self) -> None:
-       self.postings.merge(other.postings, Posting.union)
+    def merge(self, other: Self) -> Self:
+       self.postings.merge(other.postings, Posting.merge)
+       return self
 
     def get_docIDs(self) -> set[int]:
         return set(p for p in self.postings.keys())
@@ -375,40 +386,56 @@ class PostingList:
     
 class Term:
     def __init__(self, term: str, first_docID: int, *positions_in_first_doc: int) -> None:
-        self.term: str = term
+        self.string: str = term
         self.posting_list: PostingList = PostingList.init_from(first_docID, *positions_in_first_doc)
 
     def merge(self, other: Self) -> Self:
         if (self == other):
             self.posting_list.merge(other.posting_list)
-        return self
-        
+        return self        
 
     def __eq__(self, other) -> bool:
-        return self.term == other.term
+        return self.string == other.string
     
     def __gt__(self, other) -> bool:
-        return self.term > other.term
+        return self.string > other.string
     
     def __repr__(self) -> str:
-        return f"{self.term}: {self.posting_list!r}"
+        return f"{self.string}: {self.posting_list!r}"
     
     def __hash__(self) -> int:
-        return hash(self.term)
+        return hash(self.string)
     
 class KGram:
-    def __init__(self, kgram: str, *terms: Term) -> None:
-        self.kgram: str = kgram
-        self._terms : set[Term] = {*terms} #TODO public?
+    def __init__(self, kgram_str: str, *terms: Term) -> None:
+        self.string: str = kgram_str
+        # self._terms: set[Term] = {*terms} #TODO public?
+        self._terms: HashMap[str, Term] = HashMap({t.string: t for t in terms}, Term.merge)
     
     @classmethod
-    def get_kgrams(cls, term: Term) -> list[Self]:
-        #TODO build kgrams from term
-        return []
-    
-    def add_terms(self, *terms: Term) -> None:
-        self._terms.update(terms)
+    def build_kgrams(cls, term: Term, k_length: int, build_first_two_kgrams: bool = True) -> list[Self]:
+        # build_leading_kgrams e.g.
+        # if True,  DRONE -> $DR, DRO, RON, ONE, NE$
+        # if False, DRONE -> RON, ONE, NE$
+        # where $ is start/end/delimiter of word symbol
+        kgrams: list[Self] = []
+        delimiter = QuerySpecialSymbols.WORD_DELIMITER.symbol
 
+        term_str = ''
+        if (build_first_two_kgrams):
+            term_str = f'{delimiter}{term.string}{delimiter}'
+        else:
+            term_str = f'{term.string[1:]}{delimiter}'
+
+        for i in range(len(term_str) - k_length + 1):
+            kgram = cls(term_str[i:i+k_length], term)
+            kgrams.append(kgram)
+
+        return kgrams
+
+    def merge(self, other: Self) -> Self:
+        self._terms.merge(other._terms, Term.merge)
+        return self
 
 #TODO improve
 def normalize(text: str) -> str:
@@ -427,24 +454,26 @@ class Index(abc.ABC):
     def __getitem__(self, term: str) -> PostingList:
         pass
 
+    @abc.abstractmethod
+    def wildcard_search(self, string: str) -> PostingList:
+        pass
+
 class InvertedIndex(Index):
     def __init__(self) -> None:
         # simple list: 1.33 GB of RAM -> 201799 terms
-        #self._dictionary: list[Term] = [] #TODO Trie?
+        #self._dictionary: list[Term] = []
 
         # HashMap: 1.34 GB
-        #self._dictionary: BooleanMap[str, Term] = HashMap() #TODO Trie?
+        #self._dictionary: HashMap[str, Term] = HashMap()
 
         # Trie: 1.49 GB
-        self._dictionary: BooleanMap[str, Term] = Trie()
+        # 2 Tries (dict + kgrams dict): 2.15 GB, indexing time: 4 minutes
+        self._dictionary: Trie[Term] = Trie()
+        self._kgrams_dict: Trie[KGram] = Trie()
 
     
     @classmethod
-    def from_corpus(cls, corpus: dict[int, Document]) -> Self:
-        # TODO build k-grams dictionary
-
-        #temp_dict: dict[str, Term] = {}
-        
+    def from_corpus(cls, corpus: dict[int, Document]) -> Self:        
         index = cls()
         for doc in corpus.values():
             if (doc.docID % 1000 == 0):
@@ -453,25 +482,29 @@ class InvertedIndex(Index):
             for position, token in enumerate(tokens):
                 term = Term(token, doc.docID, position)
                 index._dictionary.add(token, term, Term.merge)
-                # try:
-                #     temp_dict[token].merge(term)
-                # except KeyError:
-                #     temp_dict[token] = term
-
-        # index._dictionary = sorted(temp_dict.values())
-        #index._dictionary = HashMap(temp_dict)
-        #index._dictionary = Trie(temp_dict)
+                kgrams = KGram.build_kgrams(term, 3, False)
+                index._kgrams_dict.update({k.string: k for k in kgrams}, KGram.merge)
         return index
     
     def __getitem__(self, term: str) -> PostingList:
-        # for t in self._dictionary:
-        #     if (t.term == term):
-        #         return t.posting_list
-        # return PostingList()
         try:
             return self._dictionary[term].posting_list
         except KeyError:
             return PostingList()
+        
+    def wildcard_search(self, string: str) -> PostingList: #TODO implement
+        if (WildcardType.TRAILING.matches(string)):
+            word = string[:-1]
+            terms_map = self._dictionary.items_with_prefix(word)
+            posting_lists = (t.posting_list for _,t in terms_map)
+            pl = reduce(PostingList.merge, posting_lists)
+            return pl
+        if (WildcardType.LEADING.matches(string)):
+            word = string[1:]
+
+        if (WildcardType.GENERAL.matches(string)):
+            words = string.split(f'{QuerySpecialSymbols.WILDCARD.symbol}')
+        raise Exception #TODO invalid wildcard pattern
         
 class QuerySpecialSymbols(Enum):
     AND = '&'
@@ -481,6 +514,7 @@ class QuerySpecialSymbols(Enum):
     CLOSED_PARENTHESIS = ')'
     QUOTE = '"'
     WILDCARD = '*'
+    WORD_DELIMITER = '\x03' # ETX hex code
     
     @property
     def symbol(self) -> str:
@@ -498,7 +532,8 @@ class OperatorType(Enum):
     
 class TokenType(Enum):
     WORD = re.compile('\\w+') #TODO clean up query and terms before building index (normalize)
-    WILDCARD_WORD = re.compile('[\\w\\*]*(?:(?:\\w\\*)|(?:\\*\\w))[\\w\\*]*') #TODO remove duplicate symbols in query(?)
+    # WILDCARD_WORD = re.compile('[\\w\\*]*(?:(?:\\w\\*)|(?:\\*\\w))[\\w\\*]*') #TODO remove duplicate symbols in query(?)
+    WILDCARD_WORD = re.compile(f'[\\w\\{QuerySpecialSymbols.WILDCARD.symbol}]*(?:(?:\\w\\{QuerySpecialSymbols.WILDCARD.symbol})|(?:\\{QuerySpecialSymbols.WILDCARD.symbol}\\w))[\\w\\{QuerySpecialSymbols.WILDCARD.symbol}]*')
     OPERATOR = re.compile(f'[{QuerySpecialSymbols.AND.symbol}{QuerySpecialSymbols.OR.symbol}{QuerySpecialSymbols.MINUS.symbol}]')
     OPEN_PARENTHESIS = re.compile(f'\\{QuerySpecialSymbols.OPEN_PARENTHESIS.symbol}')
     CLOSED_PARENTHESIS = re.compile(f'\\{QuerySpecialSymbols.CLOSED_PARENTHESIS.symbol}')
@@ -508,6 +543,14 @@ class TokenType(Enum):
         m = re.fullmatch(self.value, string)
         return m is not None
 
+class WildcardType(Enum):
+    TRAILING = re.compile(f'^\\w+\\{QuerySpecialSymbols.WILDCARD.symbol}$')
+    LEADING = re.compile(f'^\\{QuerySpecialSymbols.WILDCARD.symbol}\\w+$')
+    GENERAL = TokenType.WILDCARD_WORD.value
+
+    def matches(self, string: str) -> bool:
+        m = re.fullmatch(self.value, string)
+        return m is not None
 
 class QueryNode(abc.ABC):
     @abc.abstractmethod
@@ -526,15 +569,14 @@ class Prefix(QueryNode):
         self._string = string
 
     def query(self, index: Index) -> set[int]:
-        return index[self._string].get_docIDs() # TODO: implement searching by prefix inside index
+        return index[self._string].get_docIDs()
     
-class WildcardOperator(QueryNode):
+class WildcardToken(Token):
     def __init__(self, string: str) -> None:
-        self._strings: list[str] = []
-        # TODO transform string into multiple trailing wildcard strings
-
-    def query(self, index: Index) -> set[int]: # TODO check slides and implement
-        ...
+        super().__init__(string)
+    
+    def query(self, index: Index) -> set[int]:
+        return index.wildcard_search(self._string).get_docIDs()
 
 class Phrase(QueryNode):
     def __init__(self, ordered_tokens: list[str]) -> None:
@@ -701,7 +743,7 @@ class Query:
             return node
         
         if (TokenType.WILDCARD_WORD.matches(ql[self._i])):
-            node = WildcardOperator(ql[self._i])
+            node = WildcardToken(ql[self._i])
             self._i += 1
             return node
         
@@ -773,7 +815,7 @@ def parse_corpus() -> dict[int, Document]:
             try:
                 # plot[0] movie id
                 # plot[1] plot
-                # doc = Document(movies_dict[plot[0]], plot[1]) # REMOVED PLOT FOR DEBUG
+                #doc = Document(movies_dict[plot[0]], plot[1]) # REMOVED PLOT FOR DEBUG
                 doc = Document(movies_dict[plot[0]], "")
                 corpus[doc.docID] = doc
             except KeyError:
