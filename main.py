@@ -1,6 +1,7 @@
 from functools import total_ordering, reduce
 import abc
 from  collections.abc import MutableSet, MutableMapping, Iterable, Mapping, ItemsView, Iterator, Callable, Hashable
+from itertools import chain
 import csv  # Import the csv module for CSV file parsing
 import re  # Import the re module for regular expression operations
 from typing import Any, Self, TypeVar, Protocol, Generic, Optional, cast
@@ -145,7 +146,6 @@ class Trie(BooleanMap[str, T]):
                 return (key[:i], node)
         return (key, node)
     
-    # TODO: docs
     # return the node where to operate when deleting a word
     # and the index incremented by 1 of the letter of the child that points to this node 
     # (0 if root node)
@@ -157,7 +157,6 @@ class Trie(BooleanMap[str, T]):
         for i in range(len(string)):
             next = next.children[string[i]]
             if (len(next.children) > 1 or (len(next.children) > 0 and next.has_value())):
-                # TODO: sistemare commenti
                 index = i + 1
                 node = next
         return (index, node)
@@ -250,7 +249,7 @@ class Trie(BooleanMap[str, T]):
         root.children[""] = node
         return ((prefix + k, v) for k,v in self._items_from_node(root)) 
     
-    def items(self): # type: ignore # items() shuold return a ItemsView (TODO)
+    def items(self): # type: ignore # items() shuold return a ItemsView
         return self._items_from_node(self._root)
     
     def __len__(self) -> int:
@@ -309,13 +308,11 @@ class Document:
     
     def get_content_as_string(self) -> str:
         return repr(self.content)
-    
-#TODO Corpus class? with dict of documents?
 
 @total_ordering
 class Posting:
     def __init__(self, docID: int, *positions: int) -> None:
-        self.docID: int = docID #TODO _docID or docID?
+        self.docID: int = docID
         self.term_positions: set[int] = set(positions)
         
     def merge(self, other: Self) -> Self:
@@ -344,45 +341,45 @@ class Posting:
         return str(self.docID)
 
 class PostingList:
-    def __init__(self) -> None: #TODO overload with first docID? with existing list?
-        self.postings: BooleanMap[int, Posting] = HashMap() # TODO private 
+    def __init__(self) -> None:
+        self._postings: BooleanMap[int, Posting] = HashMap()
 
     @classmethod
     def init_from(cls, docID: int, *term_positions: int) -> Self:
         pl = cls()
-        pl.postings.add(docID, Posting(docID, *term_positions))
+        pl._postings.add(docID, Posting(docID, *term_positions))
         return pl
     
     @classmethod
     def _from(cls, postings: BooleanMap[int, Posting]) -> Self:
         plist = cls()
-        plist.postings = postings
+        plist._postings = postings
         return plist    
 
     def __iter__(self) -> Iterator[int]:
-        return iter(self.postings)
+        return iter(self._postings)
     
     def __getitem__(self, docId: int) -> Posting:
-        return self.postings[docId]
+        return self._postings[docId]
 
     def union(self, other: Self) -> Self:
-        return self.__class__._from(self.postings.union(other.postings))
+        return self.__class__._from(self._postings.union(other._postings))
     
     def intersection(self, other: Self) -> Self:
-        return self.__class__._from(self.postings.intersection(other.postings))
+        return self.__class__._from(self._postings.intersection(other._postings))
     
     def merge(self, other: Self) -> Self:
-       self.postings.merge(other.postings, Posting.merge)
+       self._postings.merge(other._postings, Posting.merge)
        return self
 
     def get_docIDs(self) -> set[int]:
-        return set(p for p in self.postings.keys())
+        return set(p for p in self._postings.keys())
     
     def __len__(self) -> int:
-        return len(self.postings)
+        return len(self._postings)
 
     def __repr__(self) -> str:
-        return "[" + ", ".join((repr(p) for p in self.postings)) + "]"
+        return "[" + ", ".join((repr(p) for p in self._postings)) + "]"
     
 class Term:
     def __init__(self, term: str, first_docID: int, *positions_in_first_doc: int) -> None:
@@ -409,33 +406,41 @@ class Term:
 class KGram:
     def __init__(self, kgram_str: str, *terms: Term) -> None:
         self.string: str = kgram_str
-        # self._terms: set[Term] = {*terms} #TODO public?
         self._terms: HashMap[str, Term] = HashMap({t.string: t for t in terms}, Term.merge)
-    
+
+    @staticmethod
+    def build_kgrams_without_delimiter(term_str: str, k_length: int) -> tuple[str, ...]:
+        return tuple(term_str[i:i+k_length] for i in range(len(term_str) - k_length + 1))
+
     @classmethod
-    def build_kgrams(cls, term: Term, k_length: int, build_first_two_kgrams: bool = True) -> list[Self]:
-        # build_leading_kgrams e.g.
+    def build_kgrams_strings(cls, term_str: str, k_length: int, build_first_two_kgrams: bool = True) -> tuple[str, ...]:
+        # build_first_two_kgrams e.g.
         # if True,  DRONE -> $DR, DRO, RON, ONE, NE$
         # if False, DRONE -> RON, ONE, NE$
         # where $ is start/end/delimiter of word symbol
-        kgrams: list[Self] = []
         delimiter = QuerySpecialSymbols.WORD_DELIMITER.symbol
-
-        term_str = ''
+        delim_term = ''
         if (build_first_two_kgrams):
-            term_str = f'{delimiter}{term.string}{delimiter}'
+            delim_term = f'{delimiter}{term_str}{delimiter}'
         else:
-            term_str = f'{term.string[1:]}{delimiter}'
+            delim_term = f'{term_str[1:]}{delimiter}'
 
-        for i in range(len(term_str) - k_length + 1):
-            kgram = cls(term_str[i:i+k_length], term)
-            kgrams.append(kgram)
-
-        return kgrams
+        return cls.build_kgrams_without_delimiter(delim_term, k_length)
+    
+    @classmethod
+    def build_kgrams(cls, term: Term, k_length: int, build_first_two_kgrams: bool = True) -> tuple[Self, ...]:
+        l = tuple(cls(kstr, term) for kstr in cls.build_kgrams_strings(term.string, k_length, build_first_two_kgrams))
+        return l
 
     def merge(self, other: Self) -> Self:
         self._terms.merge(other._terms, Term.merge)
         return self
+    
+    def get_terms(self):
+        return set(self._terms.values())
+    
+    def __repr__(self) -> str:
+        return f'{self.string} -> [{", ".join(t.string for t in self._terms.values())}]'
 
 #TODO improve
 def normalize(text: str) -> str:
@@ -459,15 +464,9 @@ class Index(abc.ABC):
         pass
 
 class InvertedIndex(Index):
-    def __init__(self) -> None:
-        # simple list: 1.33 GB of RAM -> 201799 terms
-        #self._dictionary: list[Term] = []
-
-        # HashMap: 1.34 GB
-        #self._dictionary: HashMap[str, Term] = HashMap()
-
-        # Trie: 1.49 GB
-        # 2 Tries (dict + kgrams dict): 2.15 GB, indexing time: 4 minutes
+    def __init__(self) -> None:        
+        self.kgrams_length = 3
+        self._build_first_two_kgrams = False
         self._dictionary: Trie[Term] = Trie()
         self._kgrams_dict: Trie[KGram] = Trie()
 
@@ -482,7 +481,7 @@ class InvertedIndex(Index):
             for position, token in enumerate(tokens):
                 term = Term(token, doc.docID, position)
                 index._dictionary.add(token, term, Term.merge)
-                kgrams = KGram.build_kgrams(term, 3, False)
+                kgrams = KGram.build_kgrams(term, index.kgrams_length, index._build_first_two_kgrams)
                 index._kgrams_dict.update({k.string: k for k in kgrams}, KGram.merge)
         return index
     
@@ -492,19 +491,63 @@ class InvertedIndex(Index):
         except KeyError:
             return PostingList()
         
-    def wildcard_search(self, string: str) -> PostingList: #TODO implement
-        if (WildcardType.TRAILING.matches(string)):
-            word = string[:-1]
-            terms_map = self._dictionary.items_with_prefix(word)
-            posting_lists = (t.posting_list for _,t in terms_map)
-            pl = reduce(PostingList.merge, posting_lists)
-            return pl
-        if (WildcardType.LEADING.matches(string)):
-            word = string[1:]
+    def wildcard_search(self, string: str) -> PostingList:
+        wc = QuerySpecialSymbols.WILDCARD.symbol
+        delim = QuerySpecialSymbols.WORD_DELIMITER.symbol
+        spaced = re.compile(f'\\{wc}+').sub(f' {wc} ', string)
+        tokens = spaced.split()
+        pattern = ''.join(t if t != wc else f'\\w{wc}' for t in tokens)
+        if (len(tokens) < 2):
+            raise Exception # TODO expected a* or *a
+        partial_sets_of_terms: list[set[Term]] = []
+        first_part_terms: set[Term] = set()
+        is_word_leading = tokens[0] != wc
+        is_word_trailing = tokens[-1] != wc
+        if (is_word_leading):
+            terms_map = self._dictionary.items_with_prefix(tokens[0])
+            first_part_terms = set(t for _,t in terms_map)
+            if (len(tokens) == 2):
+                posting_lists = (t.posting_list for t in first_part_terms)
+                return reduce(PostingList.union, posting_lists)
+            tokens = tokens[2:]
+        # now tokens[0] == word1
 
-        if (WildcardType.GENERAL.matches(string)):
-            words = string.split(f'{QuerySpecialSymbols.WILDCARD.symbol}')
-        raise Exception #TODO invalid wildcard pattern
+        if (is_word_trailing):
+            kgrams = KGram.build_kgrams_without_delimiter(f'{tokens[-1]}{delim}', self.kgrams_length)
+            if (len(kgrams) > 0):
+                kgrams_found = (self._kgrams_dict[k] for k in kgrams)
+                partial_sets_of_terms.extend(map(KGram.get_terms, kgrams_found))                
+            tokens = tokens[:-2]
+
+        if (len(tokens) > 0):
+            # now tokens is like: [word1, *, word2, *, word3, * ...]
+            # now we have to do only trailing wildcard searches inside kgrams index
+            words = tuple(filter(lambda t: t != wc, tokens))
+            # generate a list of kgrams for each word
+            kgrams_list = map(lambda w: KGram.build_kgrams_without_delimiter(w, self.kgrams_length), words)
+            # flatten list of kgrams and get KGram objects
+            kgrams_found = (self._kgrams_dict[k] for k in chain.from_iterable(kgrams_list))
+            partial_sets_of_terms.extend(map(KGram.get_terms, kgrams_found))
+            # for words shorter than a kgram we search them as prefixes of kgrams
+            short_words = tuple(w for w in words if len(w) < self.kgrams_length)
+            for w in short_words:
+                # we get all kgrams that have prefix w
+                kgs =  list(k for _,k in self._kgrams_dict.items_with_prefix(w))
+                temp_list_set_terms = list(map(KGram.get_terms, kgs))
+                # we do the union of all terms of all kgrams we got because all belongs to the same word w
+                w_terms = reduce(set.union, temp_list_set_terms, cast(set[Term], set()))
+                partial_sets_of_terms.append(w_terms)
+
+        # intersecate kgrams results
+        final_terms = reduce(set.intersection, partial_sets_of_terms)
+        # and intersecate with first part terms if word leading
+        if (is_word_leading):
+            final_terms = final_terms.intersection(first_part_terms)
+
+        # filter out results that still not match the pattern (due to words long less than a kgram)
+        # and get posting lists
+        filtered = (t.posting_list for t in final_terms if re.fullmatch(pattern, t.string) is not None)        
+        return reduce(PostingList.union, filtered, PostingList())
         
 class QuerySpecialSymbols(Enum):
     AND = '&'
@@ -532,7 +575,7 @@ class OperatorType(Enum):
     
 class TokenType(Enum):
     WORD = re.compile('\\w+') #TODO clean up query and terms before building index (normalize)
-    # WILDCARD_WORD = re.compile('[\\w\\*]*(?:(?:\\w\\*)|(?:\\*\\w))[\\w\\*]*') #TODO remove duplicate symbols in query(?)
+    # WILDCARD_WORD = re.compile('[\\w\\*]*(?:(?:\\w\\*)|(?:\\*\\w))[\\w\\*]*')
     WILDCARD_WORD = re.compile(f'[\\w\\{QuerySpecialSymbols.WILDCARD.symbol}]*(?:(?:\\w\\{QuerySpecialSymbols.WILDCARD.symbol})|(?:\\{QuerySpecialSymbols.WILDCARD.symbol}\\w))[\\w\\{QuerySpecialSymbols.WILDCARD.symbol}]*')
     OPERATOR = re.compile(f'[{QuerySpecialSymbols.AND.symbol}{QuerySpecialSymbols.OR.symbol}{QuerySpecialSymbols.MINUS.symbol}]')
     OPEN_PARENTHESIS = re.compile(f'\\{QuerySpecialSymbols.OPEN_PARENTHESIS.symbol}')
@@ -543,21 +586,12 @@ class TokenType(Enum):
         m = re.fullmatch(self.value, string)
         return m is not None
 
-class WildcardType(Enum):
-    TRAILING = re.compile(f'^\\w+\\{QuerySpecialSymbols.WILDCARD.symbol}$')
-    LEADING = re.compile(f'^\\{QuerySpecialSymbols.WILDCARD.symbol}\\w+$')
-    GENERAL = TokenType.WILDCARD_WORD.value
-
-    def matches(self, string: str) -> bool:
-        m = re.fullmatch(self.value, string)
-        return m is not None
-
 class QueryNode(abc.ABC):
     @abc.abstractmethod
     def query(self, index: Index) -> set[int]:
         pass
 
-class Token(QueryNode): #TODO word of the query, name correct?
+class Token(QueryNode):
     def __init__(self, string: str) -> None:
         self._string = string
 
@@ -672,7 +706,7 @@ class Query:
     
     @staticmethod
     def _is_word(string: str) -> bool:
-        x = re.search("[a-zA-Z0-9]+", string) #TODO
+        x = re.search("\\w+", string)
         return x is not None
 
     @staticmethod
@@ -819,7 +853,6 @@ def parse_corpus() -> dict[int, Document]:
                 doc = Document(movies_dict[plot[0]], "")
                 corpus[doc.docID] = doc
             except KeyError:
-                #TODO
                 pass
     return corpus
 
