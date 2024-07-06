@@ -1,0 +1,2 @@
+from booleanmodel.boolean_model import BooleanIRSystem
+from booleanmodel.entities import Document
