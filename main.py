@@ -1,6 +1,12 @@
 from booleanmodel.boolean_model import BooleanIRSystem, Document
 from booleanmodel.enums import QuerySpecialSymbols
 import csv
+import os
+import os.path
+
+SAVE_DATA_DIRECTORY = "ir_data"
+SAVE_DATA_INDEX_FILE = "index.pickle"
+SAVE_DATA_CORPUS_FILE = "corpus.pickle"
 
 instructions = f'''
 Welcome to BooleanSearchEngine! A powerful boolean Information Retrieval system
@@ -52,21 +58,44 @@ def parse_corpus() -> list[Document]:
             try:
                 # plot[0] movie id
                 # plot[1] plot
-                #doc = Document(movies_dict[plot[0]], plot[1]) # REMOVED PLOT FOR DEBUG
-                doc = Document(movies_dict[plot[0]], "")
+                doc = Document(movies_dict[plot[0]], plot[1]) # REMOVED PLOT FOR DEBUG
+                # doc = Document(movies_dict[plot[0]], "")
                 corpus.append(doc)
             except KeyError:
                 pass
     return corpus
 
+def load() -> BooleanIRSystem | None:
+    print("Loading index...")
+    if (not os.path.exists(SAVE_DATA_DIRECTORY)):
+        return None
+    if (not os.path.isdir(SAVE_DATA_DIRECTORY)):
+        return None
+    if (not os.path.exists(f'{SAVE_DATA_DIRECTORY}/{SAVE_DATA_INDEX_FILE}')):
+        return None
+    if (not os.path.exists(f'{SAVE_DATA_DIRECTORY}/{SAVE_DATA_CORPUS_FILE}')):
+        return None
+    ir = BooleanIRSystem.load_from_file(SAVE_DATA_DIRECTORY)
+    ir.query("test")
+    return ir
+
+def save(ir : BooleanIRSystem):
+    os.makedirs(SAVE_DATA_DIRECTORY, exist_ok=True)
+    ir.save_to_file(SAVE_DATA_DIRECTORY)
+
 def main():
     try:
         print(instructions)
-        print("Reading the documents...", end=" ")
-        corpus = parse_corpus()
-        print("Done")
-        print("Indexing, it may take some time, grab a cup of coffee in the meanwhile if you want...\n")
-        ir = BooleanIRSystem.from_corpus(corpus)
+        ir = load()
+        if (ir == None):
+            print("Saved index not found")
+            print("Reading the documents...", end=" ")
+            corpus = parse_corpus()
+            print("Done")
+            print("Indexing, it may take some time, grab a cup of coffee in the meanwhile if you want...\n")
+            ir = BooleanIRSystem.from_corpus(corpus)
+            print("Saving index...")
+            save(ir)
         print("\nSystem ready!")
         exit = False
         while (not exit):

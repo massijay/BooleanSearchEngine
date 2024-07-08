@@ -8,6 +8,7 @@ from typing import Self, cast
 from functools import total_ordering, reduce
 import abc
 import re
+import pickle
 
 # Document class represents the document itself
 # It can be subclassed to include richer content and features
@@ -178,6 +179,18 @@ class InvertedIndex(Index):
         self._build_first_two_kgrams = False
         self._dictionary: Trie[Term] = Trie()
         self._kgrams_dict: Trie[KGram] = Trie()
+
+    def save_to_file(self, file_path: str):
+        with open(file_path, 'wb') as file:
+            pickle.dump(self, file)
+
+    @classmethod
+    def load_from_file(cls, file_path: str) -> Self:
+        index: Self
+        with open(file_path, 'rb') as file:
+            data = pickle.load(file)
+            index = cast(Self, data)
+        return index
 
     @classmethod
     def from_corpus(cls, corpus: list[Document]) -> Self:
